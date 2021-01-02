@@ -18,6 +18,16 @@
 #include <lauxlib.h>
 #include <unistd.h>
 
+#include <arpa/inet.h>
+#include <sys/select.h>
+#include <fcntl.h>
+#include <signal.h>
+#include <stdbool.h>
+//#include <stdio.h>
+//#include <unistd.h>
+
+#include "tinyosc.h"
+
 int hid_output;
 int midi_output;
 int running = 0;
@@ -100,6 +110,54 @@ void *run_lights(void *void_ptr){
 }
 
 int main() {
+  // open a socket to listen for datagrams (i.e. UDP packets) on port 9000
+  const int fd = socket(AF_INET, SOCK_DGRAM, 0);
+  fcntl(fd, F_SETFL, O_NONBLOCK); // set the socket to non-blocking
+  struct sockaddr_in sin;
+  sin.sin_family = AF_INET;
+  sin.sin_port = htons(9000);
+  sin.sin_addr.s_addr = INADDR_ANY;
+  bind(fd, (struct sockaddr *) &sin, sizeof(struct sockaddr_in));
+  printf("tinyosc is now listening on port 9000.\n");
+  printf("Press Ctrl+C to stop.\n");
+
+//// sender
+// https://idiotdeveloper.com/file-transfer-using-tcp-socket-in-c/
+char *ip = "192.168.178.26";
+  int port = 12000;
+  int e;
+
+  struct sockaddr_in server_addr;
+  sockfd = socket(AF_INET, SOCK_DGRAM, 0);
+  if(sockfd < 0) {
+    perror("[-]Error in socket");
+    exit(1);
+  }
+  printf("[+]Server socket created successfully.\n");
+
+  server_addr.sin_family = AF_INET;
+  server_addr.sin_port = htons(port);
+  server_addr.sin_addr.s_addr = inet_addr(ip);
+
+  e = connect(sockfd, (struct sockaddr*)&server_addr, sizeof(server_addr));
+  if(e == -1) {
+    perror("[-]Error in socket");
+    exit(1);
+  }
+ printf("[+]Connected to Server.\n");
+
+// write the OSC packet to the buffer
+// returns the number of bytes written to the buffer, negative on error
+// note that tosc_write will clear the entire buffer before writing to it
+int len = tosc_writeMessage(
+    buffer, sizeof(buffer),
+    "/ping", // the address
+    "fsi",   // the format; 'f':32-bit float, 's':ascii string, 'i':32-bit integer
+    1.0f, "hello", 2);
+
+// send the data out of the socket
+send(sockfd, buffer, len, 0);
+
     int ret;
     chdir(KEYBOW_HOME);
 
@@ -186,6 +244,44 @@ int main() {
     }
 
     while (running){
+    fd_set readSet;
+    FD_ZERO(&readSet);
+    FD_SET(fd, &readSet);
+    struct timeval timeout = {0, 10}; // select times out after 1 second
+    if (select(fd+1, &readSet, NULL, NULL, &timeout) > 0) {
+      struct sockaddr sa; // can be safely cast to sockaddr_in
+      socklen_t sa_len = sizeof(struct sockaddr_in);
+      int len = 0;
+      while ((len = (int) recvfrom(fd, buffer, sizeof(buffer), 0, &sa, &sa_len)) > 0) {
+        if (tosc_isBundle(buffer)) {
+          tosc_bundle bundle;
+          tosc_parseBundle(&bundle, buffer, len);
+          const uint64_t timetag = tosc_getTimetag(&bundle);
+          tosc_message osc;
+          while (tosc_getNextMessage(&bundle, &osc)) {
+            tosc_printMessage(&osc);
+          }
+        } else {
+          tosc_message osc;
+          tosc_parseMessage(&osc, buffer, len);
+//          tosc_printMessage(&osc);
+char * address = tosc_getAddress(&osc);
+//printf("%s\n", address);
+            if(strcmp(address, "/keybow/led") == 0) {
+              if(strcmp(tosc_getFormat(&osc), "iiii") == 0) {
+//printf("good format\n");
+                int k = tosc_getNextInt32(&osc);
+                int r = tosc_getNextInt32(&osc);
+                int g = tosc_getNextInt32(&osc);
+                int b = tosc_getNextInt32(&osc);
+printf("%d %d %d %d\n", k, r, g, b);
+                lights_setPixel(k,r,g,b);
+              }
+            }
+        }
+      }
+    }
+
         /*int delta = (millis() / (1000/60)) % height;
         if (lights_auto) {
             lights_drawPngFrame(delta);
@@ -196,6 +292,10 @@ int main() {
         usleep(1000);
         //usleep(250000);
     }      
+
+    lights_setAll(0,0,0);
+    close(fd);
+    close(sockfd);
 
     pthread_join(t_run_lights, NULL);
 

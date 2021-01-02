@@ -3,6 +3,8 @@
 #include "lights.h"
 #include "lua-config.h"
 
+#define KEYBOW_NO_USB_HID
+
 #define NUM_KEYS 12
 
 #ifndef KEYBOW_HOME
@@ -28,3 +30,6 @@ keybow_key get_key(unsigned short index);
 int initUSB();
 int initGPIO();
 int main();
+
+int sockfd;
+char buffer[2048];

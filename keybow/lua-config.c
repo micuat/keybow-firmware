@@ -344,6 +344,16 @@ static int l_set_key(lua_State *L) {
     unsigned short state = lua_toboolean(L, 2);
     lua_pop(L, nargs);
 
+int len = tosc_writeMessage(
+    buffer, sizeof(buffer),
+    "/keybow", // the address
+    "ii",   // the format; 'f':32-bit float, 's':ascii string, 'i':32-bit integ$
+    hid_code,state);
+
+// send the data out of the socket
+send(sockfd, buffer, len, 0);
+
+
     printf("l_set_key %02x %d\n", hid_code, state);
     if(state){
         if(!isPressed(hid_code)){
